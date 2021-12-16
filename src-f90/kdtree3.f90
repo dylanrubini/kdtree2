@@ -218,7 +218,7 @@ bigloop:  do
           a%elems(i) = a%elems(largest)
           a%elems(largest) = temp 
           ! 
-          ! Canonical heapify() algorithm has tail-ecur sive call: 
+          ! Canonical heapify() algorithm has tail-ecursive call: 
           !
           !        call heapify(a,largest)   
           ! we will simulate with cycle
@@ -472,7 +472,7 @@ bigloop:  do
 end module kdtree2_priority_queue_module
 
 
-module kdtree2_module
+module kdtree3_module
   use kdtree2_precision_module
   use kdtree2_priority_queue_module
   ! K-D tree routines in Fortran 90 by Matt Kennel.
@@ -1057,7 +1057,8 @@ contains
     call validate_query_storage(nn) 
     sr%pq = pq_create(results)
 
-    call search(tp%root)
+    ! call search(tp%root)
+    call search_master(tp%root)
 
     if (tp%sort) then
        call kdtree2_sort_results(nn, results)
@@ -1100,7 +1101,8 @@ contains
     call validate_query_storage(nn)
     sr%pq = pq_create(results)
 
-    call search(tp%root)
+    ! call search(tp%root)
+    call search_master(tp%root)
 
     if (tp%sort) then
        call kdtree2_sort_results(nn, results)
@@ -1155,7 +1157,9 @@ contains
     !sr%il = -1               ! set to invalid indexes
     !
 
-    call search(tp%root)
+    ! call search(tp%root)
+    call search_master(tp%root)   
+     
     nfound = sr%nfound
     if (tp%sort) then
        call kdtree2_sort_results(nfound, results)
@@ -1221,7 +1225,9 @@ contains
     !sr%il = -1               ! set to invalid indexes
     !
 
-    call search(tp%root)
+    ! call search(tp%root)
+    call search_master(tp%root)
+
     nfound = sr%nfound
     if (tp%sort) then
        call kdtree2_sort_results(nfound,results)
@@ -1274,7 +1280,8 @@ contains
     !
     sr%overflow = .false.
 
-    call search(tp%root)
+    ! call search(tp%root)
+    call search_master(tp%root)
 
     nfound = sr%nfound
 
@@ -1324,8 +1331,9 @@ contains
     !
     sr%overflow = .false.
 
-    call search(tp%root)
-
+    ! call search(tp%root)
+    call search_master(tp%root)
+    
     nfound = sr%nfound
 
     return
@@ -1364,7 +1372,105 @@ contains
     res = sum( (iv(1:d)-qv(1:d))**2 )
   end function square_distance
   
-  recursive subroutine search(node)
+  subroutine search(node)
+    !
+    ! This is the innermost core routine of the kd-tree search.  Along
+    ! with "process_terminal_node", it is the performance bottleneck. 
+    !
+    ! This version uses a logically complete secondary search of
+    ! "box in bounds", whether the sear
+    !
+    type (tree_node), intent(in), pointer          :: node 
+    type (tree_node), pointer          :: current_ptr 
+
+    ! ..
+    type(tree_node),pointer            :: ncloser, nfarther
+    !
+    integer                            :: cut_dim, i
+    ! ..
+    real(kdkind)                               :: qval, dis
+    real(kdkind)                               :: ballsize
+    real(kdkind), pointer           :: qv(:)
+    type(interval), pointer :: box(:) 
+
+
+   ! start by pointing temporary current pointer to root of the tree 
+   current_ptr => node
+
+
+  10 continue
+
+
+    if ((associated(current_ptr%left) .and. associated(current_ptr%right)) .eqv. .false.) then
+
+       if (sr%nn .eq. 0) then
+          call process_terminal_node_fixedball(current_ptr)
+       else
+          call process_terminal_node(current_ptr)
+       endif
+    else
+       ! we are not on a terminal node
+       qv => sr%qv(1:)
+       cut_dim = current_ptr%cut_dim
+
+       qval = qv(cut_dim)
+
+       if (qval < current_ptr%cut_val) then
+          ncloser => current_ptr%left
+          nfarther => current_ptr%right
+          dis = (current_ptr%cut_val_right - qval)**2
+!          extra = node%cut_val - qval
+       else
+          ncloser => current_ptr%right
+          nfarther => current_ptr%left
+          dis = (current_ptr%cut_val_left - qval)**2
+!          extra = qval- node%cut_val_left
+       endif
+
+       if (associated(ncloser)) then 
+          current_ptr       => ncloser
+          goto 10
+       endif
+
+
+       ! we may need to search the second node. 
+       if (associated(nfarther)) then
+          ballsize = sr%ballsize
+!          dis=extra**2
+          if (dis <= ballsize) then
+             !
+             ! we do this separately as going on the first cut dimen is often
+             ! a good idea.
+             ! note that if extra**2 < sr%ballsize, then the next
+             ! check will also be false. 
+             !
+             box => current_ptr%box(1:)
+             do i=1,sr%dimen
+                if (i .ne. cut_dim) then
+                   dis = dis + dis2_from_bnd(qv(i),box(i)%lower,box(i)%upper)
+                   if (dis > ballsize) then
+                      return
+                   endif
+                endif
+             end do
+             
+             !
+             ! if we are still here then we need to search mroe.
+
+
+             current_ptr       => nfarther
+
+             goto 10
+
+          endif
+       endif
+    end if
+
+    return
+  end subroutine search
+
+  
+  subroutine search_master(node)
     !
     ! This is the innermost core routine of the kd-tree search.  Along
     ! with "process_terminal_node", it is the performance bottleneck. 
@@ -1408,6 +1514,7 @@ contains
 !          extra = qval- node%cut_val_left
        endif
 
+
        if (associated(ncloser)) call search(ncloser)
 
        ! we may need to search the second node. 
@@ -1438,7 +1545,176 @@ contains
           endif
        endif
     end if
-  end subroutine search
+  end subroutine search_master
+
+
+  
+!   subroutine search_DR_Test(node)
+!     !
+!     ! This is the innermost core routine of the kd-tree search.  Along
+!     ! with "process_terminal_node", it is the performance bottleneck. 
+!     !
+!     ! This version uses a logically complete secondary search of
+!     ! "box in bounds", whether the sear
+!     !
+!     type (tree_node), intent(in), pointer          :: node 
+!     type (tree_node), pointer          :: current_ptr 
+
+!     ! ..
+!     type(tree_node),pointer            :: ncloser, nfarther
+!     !
+!     integer                            :: cut_dim, i
+!     ! ..
+!     real(kdkind)                            :: qval, dis
+!     real(kdkind)                            :: u(sr%dimen), l(sr%dimen)
+!     real(kdkind)                            :: ballsize
+!     real(kdkind), pointer           :: qv(:)
+!     type(interval), pointer :: box(:) 
+!     integer :: counter
+!     integer, save :: outer_counter = 0
+
+!     counter       = 0
+
+!    ! start by pointing temporary current pointer to root of the tree 
+!    current_ptr => node
+
+!     ! we are not on a terminal node
+!     qv => sr%qv(1:)
+
+!    outer_counter = outer_counter + 1
+
+!   10 continue
+
+!       counter = counter + 1
+
+!     if ((associated(current_ptr%left) .and. associated(current_ptr%right)) .eqv. .false.) then
+!       ! if (counter.lt.20 )&
+!       ! ! write(*,*) 'finishing now at count: ', counter, 'overall = ', outer_counter
+!       !  ! we are on a terminal node
+!        if (sr%nn .eq. 0) then
+!           call process_terminal_node_fixedball(current_ptr)
+!        else
+!           call process_terminal_node(current_ptr)
+!        endif
+!     else
+!        cut_dim = current_ptr%cut_dim
+
+!        qval = qv(cut_dim)
+
+!        if (qval < current_ptr%cut_val) then
+
+!           do i=1,sr%dimen
+!             u(i) = current_ptr%box(i)%upper
+!             l(i) = current_ptr%box(i)%lower
+!           enddo
+
+!           dis = (current_ptr%cut_val_right - qval)**2
+!           ! current_ptr => current_ptr%left
+!           if (associated(current_ptr%left)) then 
+!             current_ptr => current_ptr%left
+!             write(*,*) 'hello1'
+!             goto 10
+!          endif
+
+!           ! current_ptr => current_ptr%right
+! !          extra = node%cut_val - qval
+!             ! write(*,*) 'hello2'
+
+!           ! we may need to search the second node. 
+!           if (associated(current_ptr%right)) then
+!              ballsize = sr%ballsize
+!    !          dis=extra**2
+!              if (dis <= ballsize) then
+!                 !
+!                 ! we do this separately as going on the first cut dimen is often
+!                 ! a good idea.
+!                 ! note that if extra**2 < sr%ballsize, then the next
+!                 ! check will also be false. 
+!                 !
+!                 do i=1,sr%dimen
+!                    if (i .ne. cut_dim) then
+!                       dis = dis + dis2_from_bnd(qv(i), l(i), u(i))
+!                       if (dis > ballsize) then
+!                          return
+!                       endif
+!                    endif
+!                 end do
+                
+!                 !
+!                 ! if we are still here then we need to search mroe.
+!                 !             
+!                 ! call search(nfarther)
+
+!                 current_ptr       => current_ptr%right
+
+!                 goto 10
+
+!              endif
+!           endif
+
+!        else
+
+!           do i=1,sr%dimen
+!             u(i) = current_ptr%box(i)%upper
+!             l(i) = current_ptr%box(i)%lower
+!           enddo
+
+!           dis = (current_ptr%cut_val_left - qval)**2
+!           ! current_ptr => current_ptr%right
+!           if (associated(current_ptr%right)) then 
+!             current_ptr => current_ptr%right
+!             ! write(*,*) 'hello11'            
+!             goto 10
+!          endif
+
+!             ! write(*,*) 'hello22'
+!           ! current_ptr => current_ptr%left
+! !          extra = qval- node%cut_val_left
+
+!           ! we may need to search the second node. 
+!           if (associated(current_ptr%left)) then
+!              ballsize = sr%ballsize
+!    !          dis=extra**2
+!              if (dis <= ballsize) then
+!                 !
+!                 ! we do this separately as going on the first cut dimen is often
+!                 ! a good idea.
+!                 ! note that if extra**2 < sr%ballsize, then the next
+!                 ! check will also be false. 
+!                 !
+!                 do i=1,sr%dimen
+!                    if (i .ne. cut_dim) then
+!                       dis = dis + dis2_from_bnd(qv(i), l(i), u(i))
+!                       if (dis > ballsize) then
+!                          return
+!                       endif
+!                    endif
+!                 end do
+                
+!                 !
+!                 ! if we are still here then we need to search mroe.
+!                 !             
+!                 ! call search(nfarther)
+
+!                 current_ptr       => current_ptr%left
+
+!                 goto 10
+
+!              endif
+!           endif
+
+!        endif
+
+
+!     end if
+
+!     nullify(qv)
+!     nullify(current_ptr)
+!    write(*,*) 'finishing now at count: ', counter, 'overall = ', outer_counter
+
+!     return
+!   end subroutine search_DR_Test
+
 
 
   real(kdkind) function dis2_from_bnd(x,amin,amax) result (res)
@@ -1647,7 +1923,7 @@ contains
        !
        ! Once computed, compare to best_square distance.
        ! if it is smaller, then delete the previous largest
-       ! element and add the new one. 
+       ! element and add the new onesr%results. 
 
        ! which index to the point do we use? 
 
@@ -1897,5 +2173,5 @@ contains
     end do
   end subroutine heapsort_struct
 
-end module kdtree2_module
+end module kdtree3_module
 
